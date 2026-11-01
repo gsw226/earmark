@@ -16,8 +16,9 @@ Core Audio process taps (no virtual driver).
 
 Per routed app:
 
-1. `CATapDescription` with `bundleIDs` = the app's bundle ID group, `processRestoreEnabled = true`,
-   `muteBehavior = .muted`, `privateTap = true`, stereo mixdown.
+1. `CATapDescription(stereoMixdownOfProcesses:)` with the app's process object IDs (main + helpers),
+   `muteBehavior = .muted`, private. Process object IDs instead of the macOS 26 `bundleIDs` property: deterministic,
+   and the route is rebuilt whenever the app's process set changes (e.g. Chromium's audio helper starts).
    Muted means the app's original output to the system default device is silenced.
 2. `AudioHardwareCreateProcessTap` → tap object, read its UID (`kAudioTapPropertyUID`).
 3. `AudioHardwareCreateAggregateDevice` with the target output device as the only sub-device (main sub-device, clock source)
@@ -36,6 +37,7 @@ Rejected:
 | `AudioApps.swift` | Lists processes from `kAudioHardwarePropertyProcessObjectList` (bundle ID, PID, `IsRunningOutput`). Groups helper processes under their parent app by bundle ID prefix (`com.hnc.Discord.helper.Renderer` → `com.hnc.Discord`). Resolves app name/icon via `NSRunningApplication` / `NSWorkspace`. Observes process list and device list changes. Also lists output devices (UID, name). |
 | `AppRoute.swift` | One app's routing engine: create/destroy tap + aggregate device + IOProc. `gain` is an atomic float read by the IOProc; changing it does not rebuild anything. |
 | `RouteStore.swift` | `[bundleID: Rule]` in UserDefaults, `Rule = { deviceUID: String?, volume: Float }`. `deviceUID == nil` means system default. Devices stored by UID so a reconnected device is recognized. |
+| `Model.swift` | Observable state for the UI: apps, devices, rules, failures. Keeps live routes in sync with rules, running apps and devices. Permission check and launch-at-login. |
 | `App.swift` | Menu bar popover: one row per app [icon, name, device picker, volume slider 0–100%], then "Launch at login" toggle and Quit. |
 
 App list shown = apps currently producing output ∪ apps that have a saved rule and are running.
@@ -48,8 +50,8 @@ so untouched apps get no extra latency and no risk.
 ## Data flow
 
 1. Launch: load rules, list processes. For each running app with a rule, create its `AppRoute`.
-2. Process list changes: create routes for newly running apps that have rules. If a newly started helper process is not
-   picked up by the bundle-ID tap (verify in the first implementation step), rebuild that app's tap.
+2. Process list changes: create routes for newly running apps that have rules; rebuild a route whose app gained or lost
+   a process object.
 3. User changes volume: update `gain` only, save rule.
 4. User changes device: rebuild the aggregate device, save rule.
 5. User sets an app back to default device + 100%: destroy the route, delete the rule.
