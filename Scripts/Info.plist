@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>soundctl</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.gsw226.soundctl</string>
+  <key>CFBundleExecutable</key>
+  <string>Soundctl</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>26.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>앱별 소리를 원하는 출력 장치로 보내고 음량을 조절하기 위해 오디오를 캡처합니다.</string>
+</dict>
+</plist>
