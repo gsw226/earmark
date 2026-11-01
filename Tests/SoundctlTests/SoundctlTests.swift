@@ -23,4 +23,18 @@ final class SoundctlTests: XCTestCase {
         XCTAssertFalse(Rule(volume: 0.5).isDefault)
     }
 
+    func testRenderScalesStereoTapIntoOutput() {
+        var tap: [Float] = [1, -1, 0.5, -0.5]          // 2 frames, interleaved stereo
+        var out = [Float](repeating: 9, count: 6)       // room for 3 frames → last frame zeroed
+        tap.withUnsafeMutableBufferPointer { tapPtr in
+            out.withUnsafeMutableBufferPointer { outPtr in
+                var input = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+                    mNumberChannels: 2, mDataByteSize: 16, mData: UnsafeMutableRawPointer(tapPtr.baseAddress)))
+                var output = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+                    mNumberChannels: 2, mDataByteSize: 24, mData: UnsafeMutableRawPointer(outPtr.baseAddress)))
+                render(input: &input, output: &output, tapBuffer: 0, gain: 0.5)
+            }
+        }
+        XCTAssertEqual(out, [0.5, -0.5, 0.25, -0.25, 0, 0])
+    }
 }
