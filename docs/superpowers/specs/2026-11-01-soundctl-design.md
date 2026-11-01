@@ -1,0 +1,85 @@
+# soundctl design
+
+Mac menu bar app that routes each app's audio to a chosen output device and sets a per-app volume.
+Example: aside (browser) → built-in speakers at 60%, Discord → earphones at 100%.
+
+## Decisions
+
+- Form: menu bar app (`MenuBarExtra`, window style). No Dock icon (`LSUIElement`).
+- Rules are saved per bundle ID and re-applied automatically when the app plays audio again or soundctl restarts.
+- "Launch at login" toggle in the popover (`SMAppService.mainApp`).
+- Target: macOS 26. Swift Package + `Scripts/make-app.sh` to bundle the .app (same pattern as soundis-swift).
+
+## Approach
+
+Core Audio process taps (no virtual driver).
+
+Per routed app:
+
+1. `CATapDescription` with `bundleIDs` = the app's bundle ID group, `processRestoreEnabled = true`,
+   `muteBehavior = .muted`, `privateTap = true`, stereo mixdown.
+   Muted means the app's original output to the system default device is silenced.
+2. `AudioHardwareCreateProcessTap` → tap object, read its UID (`kAudioTapPropertyUID`).
+3. `AudioHardwareCreateAggregateDevice` with the target output device as the only sub-device (main sub-device, clock source)
+   and the tap in `kAudioAggregateDeviceTapListKey` with `kAudioSubTapDriftCompensationKey = true`,
+   `kAudioAggregateDeviceTapAutoStartKey = true`, private.
+4. IOProc on the aggregate device: copy tap input buffers to output buffers, multiply by gain.
+
+Rejected:
+- Virtual HAL driver (BlackHole / Background Music style): needs admin install and coreaudiod restart; if it breaks, all system audio breaks.
+- Relying on each app's own output setting: aside is a browser and has no app-wide output device picker.
+
+## Components
+
+| File | Responsibility |
+|---|---|
+| `AudioApps.swift` | Lists processes from `kAudioHardwarePropertyProcessObjectList` (bundle ID, PID, `IsRunningOutput`). Groups helper processes under their parent app by bundle ID prefix (`com.hnc.Discord.helper.Renderer` → `com.hnc.Discord`). Resolves app name/icon via `NSRunningApplication` / `NSWorkspace`. Observes process list and device list changes. Also lists output devices (UID, name). |
+| `AppRoute.swift` | One app's routing engine: create/destroy tap + aggregate device + IOProc. `gain` is an atomic float read by the IOProc; changing it does not rebuild anything. |
+| `RouteStore.swift` | `[bundleID: Rule]` in UserDefaults, `Rule = { deviceUID: String?, volume: Float }`. `deviceUID == nil` means system default. Devices stored by UID so a reconnected device is recognized. |
+| `App.swift` | Menu bar popover: one row per app [icon, name, device picker, volume slider 0–100%], then "Launch at login" toggle and Quit. |
+
+App list shown = apps currently producing output ∪ apps that have a saved rule and are running.
+
+## Core rule
+
+An app on the system default device at 100% volume gets no tap. Only apps the user actually changed are intercepted,
+so untouched apps get no extra latency and no risk.
+
+## Data flow
+
+1. Launch: load rules, list processes. For each running app with a rule, create its `AppRoute`.
+2. Process list changes: create routes for newly running apps that have rules. If a newly started helper process is not
+   picked up by the bundle-ID tap (verify in the first implementation step), rebuild that app's tap.
+3. User changes volume: update `gain` only, save rule.
+4. User changes device: rebuild the aggregate device, save rule.
+5. User sets an app back to default device + 100%: destroy the route, delete the rule.
+
+Device "system default" with volume < 100%: the aggregate device targets the current default output device and is rebuilt
+when the default output device changes.
+
+## Error handling
+
+| Case | Behavior |
+|---|---|
+| Target device disconnected (earphones unplugged) | Destroy the route so the app plays on the system default. Keep the rule. When the device reappears, re-apply. The picker shows the device name dimmed. |
+| Audio capture permission denied | One line at the top of the popover ("오디오 권한 필요") with a button that opens System Settings. |
+| soundctl crashes or quits | Taps and private aggregate devices belong to the process; the OS releases them and audio returns to normal. No recovery code. |
+| Tap / aggregate creation fails | Tear down whatever was created, leave that app unrouted, mark its row as failed. Other apps are unaffected. |
+| Sample rate / channel mismatch | Tap is a stereo mixdown; drift compensation on the aggregate handles clock and rate differences. |
+
+`Info.plist` needs `NSAudioCaptureUsageDescription`. The app must be signed with a stable identity (Apple Development cert)
+so the permission survives rebuilds.
+
+## Testing
+
+- One XCTest file: bundle-ID grouping (`com.hnc.Discord.helper` → `com.hnc.Discord`, unrelated IDs stay separate) and
+  `RouteStore` save → load round trip.
+- Manual checks (audio routing cannot be automated):
+  1. aside → speakers, Discord → earphones: each plays on its device.
+  2. Moving a volume slider takes effect immediately.
+  3. Unplug earphones → Discord falls back to default; plug back in → returns to earphones.
+  4. Restart soundctl → rules re-applied automatically.
+
+## Out of scope
+
+EQ, per-app microphone input, hotkeys, presets, volume above 100%.
