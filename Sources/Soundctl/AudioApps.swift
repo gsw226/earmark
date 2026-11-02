@@ -1,4 +1,5 @@
 import AppKit
+import AudioToolbox
 import CoreAudio
 
 // MARK: - Core Audio property helpers
@@ -36,10 +37,11 @@ func caString(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) 
 
 let systemObject = AudioObjectID(kAudioObjectSystemObject)
 
-/// Calls `handler` on the main queue whenever a system-object property changes.
-func observeSystem(_ selector: AudioObjectPropertySelector, _ handler: @escaping () -> Void) {
-    var address = caAddress(selector)
-    AudioObjectAddPropertyListenerBlock(systemObject, &address, .main) { _, _ in handler() }
+/// Calls `handler` on the main queue whenever the property changes.
+func observe(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+             _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal, _ handler: @escaping () -> Void) {
+    var address = caAddress(selector, scope)
+    AudioObjectAddPropertyListenerBlock(object, &address, .main) { _, _ in handler() }
 }
 
 // MARK: - Apps
@@ -85,8 +87,12 @@ func listAudioApps() -> [AudioApp] {
 // MARK: - Output devices
 
 struct OutputDevice: Identifiable, Hashable {
+    let objectID: AudioObjectID
     let uid: String
     let name: String
+    /// Master volume 0...1 and mute; nil when the device has no settable control (e.g. HDMI).
+    var volume: Float?
+    var muted: Bool?
     var id: String { uid }
 }
 
@@ -97,8 +103,28 @@ func listOutputDevices() -> [OutputDevice] {
               caValue(device, kAudioDevicePropertyTransportType, UInt32(0)) != kAudioDeviceTransportTypeAggregate,
               let uid = caString(device, kAudioDevicePropertyDeviceUID),
               let name = caString(device, kAudioObjectPropertyName) else { return nil }
-        return OutputDevice(uid: uid, name: name)
+        return OutputDevice(objectID: device, uid: uid, name: name,
+                            volume: readOutput(device, kAudioHardwareServiceDeviceProperty_VirtualMainVolume, Float32(0)),
+                            muted: readOutput(device, kAudioDevicePropertyMute, UInt32(0)).map { $0 != 0 })
     }
+}
+
+/// Reads an output-scope device control, only if the device lets us set it.
+func readOutput<T: BitwiseCopyable>(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, _ initial: T) -> T? {
+    var address = caAddress(selector, kAudioObjectPropertyScopeOutput)
+    var settable: DarwinBoolean = false
+    guard AudioObjectHasProperty(device, &address),
+          AudioObjectIsPropertySettable(device, &address, &settable) == noErr, settable.boolValue else { return nil }
+    var size = UInt32(MemoryLayout<T>.size)
+    var value = initial
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
+    return value
+}
+
+func writeOutput<T: BitwiseCopyable>(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: T) {
+    var address = caAddress(selector, kAudioObjectPropertyScopeOutput)
+    var value = value
+    AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<T>.size), &value)
 }
 
 func defaultOutputUID() -> String? {

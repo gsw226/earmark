@@ -1,4 +1,5 @@
 import AppKit
+import AudioToolbox
 import CoreAudio
 import Observation
 import ServiceManagement
@@ -15,13 +16,14 @@ final class Model {
 
     @ObservationIgnored private var routes: [String: AppRoute] = [:]
     @ObservationIgnored private let store = RouteStore()
+    @ObservationIgnored private var watchedDevices: Set<AudioObjectID> = []
 
     init() {
         rules = store.load()
         for selector in [kAudioHardwarePropertyProcessObjectList,
                          kAudioHardwarePropertyDevices,
                          kAudioHardwarePropertyDefaultOutputDevice] {
-            observeSystem(selector) { [weak self] in MainActor.assumeIsolated { self?.refresh() } }
+            observe(systemObject, selector) { [weak self] in MainActor.assumeIsolated { self?.refresh() } }
         }
         refresh()
     }
@@ -29,7 +31,7 @@ final class Model {
     func rule(for bundleID: String) -> Rule { rules[bundleID] ?? Rule() }
 
     func refresh() {
-        devices = listOutputDevices()
+        reloadDevices()
         let running = listAudioApps()
         apps = running.filter { $0.isPlaying || rules[$0.bundleID] != nil }
         permissionDenied = audioCapturePermission() == .denied
@@ -47,6 +49,28 @@ final class Model {
 
     func setVolume(_ volume: Float, for bundleID: String) {
         update(bundleID) { $0.volume = volume }
+    }
+
+    func setMasterVolume(_ volume: Float, of device: OutputDevice) {
+        writeOutput(device.objectID, kAudioHardwareServiceDeviceProperty_VirtualMainVolume, Float32(volume))
+        reloadDevices()
+    }
+
+    func setMuted(_ muted: Bool, of device: OutputDevice) {
+        writeOutput(device.objectID, kAudioDevicePropertyMute, UInt32(muted ? 1 : 0))
+        reloadDevices()
+    }
+
+    /// Re-reads devices and listens for volume/mute changes made elsewhere (volume keys, Control Center).
+    private func reloadDevices() {
+        devices = listOutputDevices()
+        for device in devices where watchedDevices.insert(device.objectID).inserted {
+            for selector in [kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyMute] {
+                observe(device.objectID, selector, kAudioObjectPropertyScopeOutput) { [weak self] in
+                    MainActor.assumeIsolated { self?.devices = listOutputDevices() }
+                }
+            }
+        }
     }
 
     func setLaunchAtLogin(_ on: Bool) {

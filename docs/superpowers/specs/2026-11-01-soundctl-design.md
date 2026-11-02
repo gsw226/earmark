@@ -42,6 +42,14 @@ Rejected:
 
 App list shown = apps currently producing output ∪ apps that have a saved rule and are running.
 
+## Output device controls
+
+Top of the popover: one row per output device with a settable master volume or mute (devices without either are hidden):
+[name] then [mute button, master volume slider]. Reads/writes `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`
+and `kAudioDevicePropertyMute` (output scope). Listens to both per device so volume keys / Control Center changes show up.
+A routed app's audio is silent if its target device is muted; soundctl never changes mute on its own (user decision 2026-11-02),
+the user unmutes from the device row.
+
 ## Core rule
 
 An app on the system default device at 100% volume gets no tap. Only apps the user actually changed are intercepted,

@@ -27,6 +27,10 @@ struct ContentView: View {
                     }
                 }
             }
+            ForEach(model.devices.filter { $0.volume != nil || $0.muted != nil }) { device in
+                DeviceRow(model: model, device: device)
+            }
+            Divider()
             ForEach(model.apps) { app in
                 AppRow(model: model, app: app)
             }
@@ -38,6 +42,33 @@ struct ContentView: View {
         .padding(14)
         .frame(width: 320)
         .onAppear { model.refresh() }
+    }
+}
+
+struct DeviceRow: View {
+    let model: Model
+    let device: OutputDevice
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(device.name).lineLimit(1)
+            HStack(spacing: 6) {
+                if let muted = device.muted {
+                    Button { model.setMuted(!muted, of: device) } label: {
+                        Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .frame(width: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(muted ? "음소거 해제" : "음소거")
+                    .accessibilityLabel(muted ? "음소거 해제" : "음소거")
+                }
+                if let volume = device.volume {
+                    Slider(value: Binding(get: { Double(volume) },
+                                          set: { model.setMasterVolume(Float($0), of: device) }),
+                           in: 0...1)
+                }
+            }
+        }
     }
 }
 
