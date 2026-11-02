@@ -5,7 +5,7 @@ struct SoundctlApp: App {
     @State private var model = Model()
 
     var body: some Scene {
-        MenuBarExtra("soundctl", systemImage: "speaker.wave.2.fill") {
+        MenuBarExtra("Earmark", systemImage: "speaker.wave.2.fill") {
             ContentView(model: model)
         }
         .menuBarExtraStyle(.window)

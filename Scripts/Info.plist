@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>soundctl</string>
+  <string>Earmark</string>
   <key>CFBundleIdentifier</key>
   <string>com.gsw226.soundctl</string>
   <key>CFBundleExecutable</key>
