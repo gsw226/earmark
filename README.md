@@ -34,3 +34,7 @@ app's volume. Apps left on the system default at 100% are not touched.
 ```sh
 swift test
 ```
+
+## License
+
+MIT
