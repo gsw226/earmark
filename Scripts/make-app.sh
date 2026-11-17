@@ -12,6 +12,7 @@ APP="build/Earmark.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/Earmark"
+strip -x "$APP/Contents/MacOS/Earmark"
 cp Scripts/Info.plist "$APP/Contents/Info.plist"
 cp -R Resources/ "$APP/Contents/Resources/"
 
