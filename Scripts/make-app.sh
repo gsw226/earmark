@@ -6,13 +6,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 swift build -c release
-BIN="$(swift build -c release --show-bin-path)/Soundctl"
+BIN="$(swift build -c release --show-bin-path)/Earmark"
 APP="build/Earmark.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp "$BIN" "$APP/Contents/MacOS/Soundctl"
+cp "$BIN" "$APP/Contents/MacOS/Earmark"
 cp Scripts/Info.plist "$APP/Contents/Info.plist"
+cp -R Resources/ "$APP/Contents/Resources/"
 
 IDENTITY="$(security find-identity -p codesigning -v | awk -F'"' '/Apple Development/ {print $2; exit}')"
 codesign --force --timestamp=none --sign "${IDENTITY:--}" "$APP"

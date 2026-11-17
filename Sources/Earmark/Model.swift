@@ -13,10 +13,12 @@ final class Model {
     private(set) var failed: [String: String] = [:]
     private(set) var permissionDenied = false
     private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
+    private(set) var launchAtLoginError: String?
 
     @ObservationIgnored private var routes: [String: AppRoute] = [:]
     @ObservationIgnored private let store = RouteStore()
     @ObservationIgnored private var watchedDevices: Set<AudioObjectID> = []
+    @ObservationIgnored private var pendingSave: Task<Void, Never>?
 
     init() {
         rules = store.load()
@@ -24,6 +26,10 @@ final class Model {
                          kAudioHardwarePropertyDevices,
                          kAudioHardwarePropertyDefaultOutputDevice] {
             observe(systemObject, selector) { [weak self] in MainActor.assumeIsolated { self?.refresh() } }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
         }
         refresh()
     }
@@ -51,30 +57,38 @@ final class Model {
         update(bundleID) { $0.volume = volume }
     }
 
+    // The per-device listeners in reloadDevices() pick up the new value.
     func setMasterVolume(_ volume: Float, of device: OutputDevice) {
         writeOutput(device.objectID, kAudioHardwareServiceDeviceProperty_VirtualMainVolume, Float32(volume))
-        reloadDevices()
     }
 
     func setMuted(_ muted: Bool, of device: OutputDevice) {
         writeOutput(device.objectID, kAudioDevicePropertyMute, UInt32(muted ? 1 : 0))
-        reloadDevices()
     }
 
     /// Re-reads devices and listens for volume/mute changes made elsewhere (volume keys, Control Center).
     private func reloadDevices() {
         devices = listOutputDevices()
         for device in devices where watchedDevices.insert(device.objectID).inserted {
+            let id = device.objectID
             for selector in [kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyMute] {
-                observe(device.objectID, selector, kAudioObjectPropertyScopeOutput) { [weak self] in
-                    MainActor.assumeIsolated { self?.devices = listOutputDevices() }
+                observe(id, selector, kAudioObjectPropertyScopeOutput) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, let i = self.devices.firstIndex(where: { $0.objectID == id }) else { return }
+                        self.devices[i].readControls()
+                    }
                 }
             }
         }
     }
 
     func setLaunchAtLogin(_ on: Bool) {
-        try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+        do {
+            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = error.localizedDescription
+        }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
@@ -82,8 +96,23 @@ final class Model {
         var rule = rule(for: bundleID)
         change(&rule)
         rules[bundleID] = rule.isDefault ? nil : rule
-        store.save(rules)
+        scheduleSave()
         apply(bundleID, app: apps.first { $0.bundleID == bundleID })
+    }
+
+    /// Slider drags change rules every tick; write them once things settle.
+    private func scheduleSave() {
+        pendingSave?.cancel()
+        pendingSave = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            if !Task.isCancelled { self?.saveNow() }
+        }
+    }
+
+    private func saveNow() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        store.save(rules)
     }
 
     /// Makes the live route for one app match its rule. No rule, app not running,
@@ -98,10 +127,10 @@ final class Model {
             return
         }
         if let route = routes[bundleID], route.deviceUID == target, Set(route.processes) == Set(app.processes) {
-            route.volume = rule.volume
+            route.setVolume(rule.volume)
             return
         }
-        routes[bundleID] = nil
+        // Build the new route before the old one goes away, so the app never briefly plays on the default device.
         do {
             routes[bundleID] = try AppRoute(processes: app.processes, deviceUID: target, volume: rule.volume)
             failed[bundleID] = nil

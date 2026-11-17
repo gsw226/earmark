@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SoundctlApp: App {
+struct EarmarkApp: App {
     @State private var model = Model()
 
     var body: some Scene {
@@ -19,9 +19,9 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             if model.permissionDenied {
                 HStack {
-                    Text("오디오 권한 필요")
+                    Text("Audio recording permission required")
                     Spacer()
-                    Button("설정 열기") {
+                    Button("Open Settings") {
                         NSWorkspace.shared.open(URL(string:
                             "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!)
                     }
@@ -35,9 +35,12 @@ struct ContentView: View {
                 AppRow(model: model, app: app)
             }
             Divider()
-            Toggle("로그인 시 실행", isOn: Binding(get: { model.launchAtLogin },
-                                                set: { model.setLaunchAtLogin($0) }))
-            Button("종료") { NSApp.terminate(nil) }
+            Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin },
+                                                  set: { model.setLaunchAtLogin($0) }))
+            if let error = model.launchAtLoginError {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Quit") { NSApp.terminate(nil) }
         }
         .padding(14)
         .frame(width: 320)
@@ -59,8 +62,8 @@ struct DeviceRow: View {
                             .frame(width: 18)
                     }
                     .buttonStyle(.borderless)
-                    .help(muted ? "음소거 해제" : "음소거")
-                    .accessibilityLabel(muted ? "음소거 해제" : "음소거")
+                    .help(muted ? "Unmute" : "Mute")
+                    .accessibilityLabel(muted ? "Unmute" : "Mute")
                 }
                 if let volume = device.volume {
                     Slider(value: Binding(get: { Double(volume) },
@@ -90,7 +93,7 @@ struct AppRow: View {
                 Spacer()
                 Picker("", selection: Binding(get: { rule.deviceUID },
                                               set: { model.setDevice($0, for: app.bundleID) })) {
-                    Text("시스템 기본").tag(String?.none)
+                    Text("System default").tag(String?.none)
                     ForEach(model.devices) { device in
                         Text(device.name).tag(String?.some(device.uid))
                     }

@@ -1,4 +1,4 @@
-# soundctl design
+# Earmark design
 
 Mac menu bar app that routes each app's audio to a chosen output device and sets a per-app volume.
 Example: aside (browser) → built-in speakers at 60%, Discord → earphones at 100%.
@@ -6,9 +6,9 @@ Example: aside (browser) → built-in speakers at 60%, Discord → earphones at 
 ## Decisions
 
 - Form: menu bar app (`MenuBarExtra`, window style). No Dock icon (`LSUIElement`).
-- Rules are saved per bundle ID and re-applied automatically when the app plays audio again or soundctl restarts.
+- Rules are saved per bundle ID and re-applied automatically when the app plays audio again or Earmark restarts.
 - "Launch at login" toggle in the popover (`SMAppService.mainApp`).
-- Target: macOS 26. Swift Package + `Scripts/make-app.sh` to bundle the .app (same pattern as soundis-swift).
+- Target: macOS 26. Swift Package + `Scripts/make-app.sh` to bundle the .app.
 
 ## Approach
 
@@ -24,7 +24,9 @@ Per routed app:
 3. `AudioHardwareCreateAggregateDevice` with the target output device as the only sub-device (main sub-device, clock source)
    and the tap in `kAudioAggregateDeviceTapListKey` with `kAudioSubTapDriftCompensationKey = true`,
    `kAudioAggregateDeviceTapAutoStartKey = true`, private.
-4. IOProc on the aggregate device: copy tap input buffers to output buffers, multiply by gain.
+4. IOProc on the aggregate device: copy the tap onto the device's preferred stereo pair, multiply by gain (slider², ramped per buffer).
+   `kAudioDevicePropertyIOProcStreamUsage` turns off the output device's own input streams so its mic never opens
+   (an open mic drops Bluetooth headsets into the call profile).
 
 Rejected:
 - Virtual HAL driver (BlackHole / Background Music style): needs admin install and coreaudiod restart; if it breaks, all system audio breaks.
@@ -34,7 +36,7 @@ Rejected:
 
 | File | Responsibility |
 |---|---|
-| `AudioApps.swift` | Lists processes from `kAudioHardwarePropertyProcessObjectList` (bundle ID, PID, `IsRunningOutput`). Groups helper processes under their parent app by bundle ID prefix (`com.hnc.Discord.helper.Renderer` → `com.hnc.Discord`). Resolves app name/icon via `NSRunningApplication` / `NSWorkspace`. Observes process list and device list changes. Also lists output devices (UID, name). |
+| `AudioApps.swift` | Lists processes from `kAudioHardwarePropertyProcessObjectList` (bundle ID, PID, `IsRunningOutput`). Groups helper processes under the app macOS holds responsible for them (so Safari gets its `com.apple.WebKit.GPU` process), falling back to bundle ID prefix (`com.hnc.Discord.helper.Renderer` → `com.hnc.Discord`). Resolves app name/icon via `NSRunningApplication` / `NSWorkspace`. Observes process list and device list changes. Also lists output devices (UID, name). |
 | `AppRoute.swift` | One app's routing engine: create/destroy tap + aggregate device + IOProc. `gain` is an atomic float read by the IOProc; changing it does not rebuild anything. |
 | `RouteStore.swift` | `[bundleID: Rule]` in UserDefaults, `Rule = { deviceUID: String?, volume: Float }`. `deviceUID == nil` means system default. Devices stored by UID so a reconnected device is recognized. |
 | `Model.swift` | Observable state for the UI: apps, devices, rules, failures. Keeps live routes in sync with rules, running apps and devices. Permission check and launch-at-login. |
@@ -47,7 +49,7 @@ App list shown = apps currently producing output ∪ apps that have a saved rule
 Top of the popover: one row per output device with a settable master volume or mute (devices without either are hidden):
 [name] then [mute button, master volume slider]. Reads/writes `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`
 and `kAudioDevicePropertyMute` (output scope). Listens to both per device so volume keys / Control Center changes show up.
-A routed app's audio is silent if its target device is muted; soundctl never changes mute on its own (user decision 2026-11-02),
+A routed app's audio is silent if its target device is muted; Earmark never changes mute on its own (user decision 2026-11-02),
 the user unmutes from the device row.
 
 ## Core rule
@@ -60,8 +62,8 @@ so untouched apps get no extra latency and no risk.
 1. Launch: load rules, list processes. For each running app with a rule, create its `AppRoute`.
 2. Process list changes: create routes for newly running apps that have rules; rebuild a route whose app gained or lost
    a process object.
-3. User changes volume: update `gain` only, save rule.
-4. User changes device: rebuild the aggregate device, save rule.
+3. User changes volume: update `gain` only, save rule (debounced).
+4. User changes device: build the new route, then drop the old one (no gap on the default device), save rule.
 5. User sets an app back to default device + 100%: destroy the route, delete the rule.
 
 Device "system default" with volume < 100%: the aggregate device targets the current default output device and is rebuilt
@@ -72,8 +74,8 @@ when the default output device changes.
 | Case | Behavior |
 |---|---|
 | Target device disconnected (earphones unplugged) | Destroy the route so the app plays on the system default. Keep the rule. When the device reappears, re-apply. The picker shows the device name dimmed. |
-| Audio capture permission denied | One line at the top of the popover ("오디오 권한 필요") with a button that opens System Settings. |
-| soundctl crashes or quits | Taps and private aggregate devices belong to the process; the OS releases them and audio returns to normal. No recovery code. |
+| Audio capture permission denied | One line at the top of the popover ("Audio recording permission required") with a button that opens System Settings. |
+| Earmark crashes or quits | Taps and private aggregate devices belong to the process; the OS releases them and audio returns to normal. No recovery code. |
 | Tap / aggregate creation fails | Tear down whatever was created, leave that app unrouted, mark its row as failed. Other apps are unaffected. |
 | Sample rate / channel mismatch | Tap is a stereo mixdown; drift compensation on the aggregate handles clock and rate differences. |
 
@@ -88,7 +90,7 @@ so the permission survives rebuilds.
   1. aside → speakers, Discord → earphones: each plays on its device.
   2. Moving a volume slider takes effect immediately.
   3. Unplug earphones → Discord falls back to default; plug back in → returns to earphones.
-  4. Restart soundctl → rules re-applied automatically.
+  4. Restart Earmark → rules re-applied automatically.
 
 ## Out of scope
 

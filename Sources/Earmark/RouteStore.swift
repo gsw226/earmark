@@ -22,6 +22,10 @@ struct RouteStore {
     }
 
     func save(_ rules: [String: Rule]) {
-        defaults.set(try? JSONEncoder().encode(rules), forKey: key)
+        do {
+            defaults.set(try JSONEncoder().encode(rules), forKey: key)
+        } catch {
+            log.error("saving rules failed: \(error)")
+        }
     }
 }

@@ -1,6 +1,9 @@
 import AppKit
 import AudioToolbox
 import CoreAudio
+import os
+
+let log = Logger(subsystem: "com.gsw226.earmark", category: "audio")
 
 // MARK: - Core Audio property helpers
 
@@ -62,7 +65,13 @@ func parentBundleID(of id: String, apps: Set<String>) -> String {
     apps.filter { id == $0 || id.hasPrefix($0 + ".") }.max { $0.count < $1.count } ?? id
 }
 
-/// Running apps that own Core Audio process objects, helpers folded into their parent app.
+/// The process macOS holds responsible for `pid` (e.g. Safari for its `com.apple.WebKit.GPU` process, which
+/// shares no bundle ID prefix with it). Private libsystem call, same one Activity Monitor and TCC rely on.
+private let responsiblePID = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid")
+    .map { unsafeBitCast($0, to: (@convention(c) (pid_t) -> pid_t).self) }
+
+/// Running apps that own Core Audio process objects, helpers folded into their parent app:
+/// by responsible process first, then by bundle ID prefix.
 func listAudioApps() -> [AudioApp] {
     let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
     let byID = Dictionary(running.compactMap { app in app.bundleIdentifier.map { ($0, app) } },
@@ -73,7 +82,10 @@ func listAudioApps() -> [AudioApp] {
     var apps: [String: AudioApp] = [:]
     for process in caIDs(systemObject, kAudioHardwarePropertyProcessObjectList) {
         guard let bundle = caString(process, kAudioProcessPropertyBundleID), !bundle.isEmpty else { continue }
-        let parent = parentBundleID(of: bundle, apps: appIDs)
+        let pid = caValue(process, kAudioProcessPropertyPID, pid_t(-1)) ?? -1
+        let responsible = pid > 0 ? responsiblePID?(pid) : nil
+        let parent = responsible.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+            .flatMap { byID[$0] == nil ? nil : $0 } ?? parentBundleID(of: bundle, apps: appIDs)
         guard parent != me, let app = byID[parent] else { continue }
         let playing = (caValue(process, kAudioProcessPropertyIsRunningOutput, UInt32(0)) ?? 0) != 0
         apps[parent, default: AudioApp(bundleID: parent, name: app.localizedName ?? parent,
@@ -91,8 +103,8 @@ struct OutputDevice: Identifiable, Hashable {
     let uid: String
     let name: String
     /// Master volume 0...1 and mute; nil when the device has no settable control (e.g. HDMI).
-    var volume: Float?
-    var muted: Bool?
+    var volume: Float? = nil
+    var muted: Bool? = nil
     var id: String { uid }
 }
 
@@ -103,9 +115,16 @@ func listOutputDevices() -> [OutputDevice] {
               caValue(device, kAudioDevicePropertyTransportType, UInt32(0)) != kAudioDeviceTransportTypeAggregate,
               let uid = caString(device, kAudioDevicePropertyDeviceUID),
               let name = caString(device, kAudioObjectPropertyName) else { return nil }
-        return OutputDevice(objectID: device, uid: uid, name: name,
-                            volume: readOutput(device, kAudioHardwareServiceDeviceProperty_VirtualMainVolume, Float32(0)),
-                            muted: readOutput(device, kAudioDevicePropertyMute, UInt32(0)).map { $0 != 0 })
+        var output = OutputDevice(objectID: device, uid: uid, name: name)
+        output.readControls()
+        return output
+    }
+}
+
+extension OutputDevice {
+    mutating func readControls() {
+        volume = readOutput(objectID, kAudioHardwareServiceDeviceProperty_VirtualMainVolume, Float32(0))
+        muted = readOutput(objectID, kAudioDevicePropertyMute, UInt32(0)).map { $0 != 0 }
     }
 }
 
@@ -124,7 +143,8 @@ func readOutput<T: BitwiseCopyable>(_ device: AudioObjectID, _ selector: AudioOb
 func writeOutput<T: BitwiseCopyable>(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: T) {
     var address = caAddress(selector, kAudioObjectPropertyScopeOutput)
     var value = value
-    AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<T>.size), &value)
+    let status = AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<T>.size), &value)
+    if status != noErr { log.error("setting \(selector) on device \(device) failed (\(status))") }
 }
 
 func defaultOutputUID() -> String? {

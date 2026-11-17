@@ -23,11 +23,19 @@ The script signs with your first "Apple Development" identity if you have one, s
 
 Grant "System Audio Recording" when asked the first time you route an app.
 
+UI is in English and Korean (follows the system language).
+
 ## How it works
 
 For each app you change, Earmark creates a muted process tap on the app's processes (helpers included) and a private
 aggregate device made of the tap and the target output device. An IOProc copies the tapped audio to the device at the
-app's volume. Apps left on the system default at 100% are not touched.
+app's volume. The output device's own microphone is left closed, so Bluetooth headsets stay in high-quality mode. Apps left on the system default at 100% are not touched.
+
+## Limitations
+
+- Every route runs a stereo mixdown: surround output from an app is folded to the device's stereo pair.
+- Helper processes are grouped under their app through a private libsystem call (`responsibility_get_pid_responsible_for_pid`);
+  if it ever goes away, Earmark falls back to bundle ID prefixes and WebKit-based apps like Safari stop showing up.
 
 ## Test
 
